@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller output (AutoTypingTool.spec is kept — build.bat uses it)
+build/
+dist/
+
+# Logs / temp
+*.log

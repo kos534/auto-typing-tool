@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import keyboard, os; print\\(os.path.dirname\\(keyboard.__file__\\)\\)\")",
+      "Bash(py -c \"import keyboard, os; print\\(os.path.dirname\\(keyboard.__file__\\)\\)\")",
+      "Bash(ls C:/Python314/Lib/site-packages/keyboard/)",
+      "Read(//c/Python314/Lib/site-packages/keyboard/**)",
+      "Bash(python -m py_compile main.py)",
+      "Bash(python -c \"import PyInstaller\")",
+      "Bash(echo \"exit:$?\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m PyInstaller --noconfirm AutoTypingTool.spec)"
+    ]
+  }
+}

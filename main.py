@@ -9,6 +9,7 @@ newlines get natural pauses, and (optionally) occasional typos are made
 and corrected with backspace.
 """
 
+import ctypes
 import random
 import threading
 import time
@@ -16,6 +17,11 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 import keyboard
+
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+GetForegroundWindow = _user32.GetForegroundWindow
+SetForegroundWindow = _user32.SetForegroundWindow
+IsWindow = _user32.IsWindow
 
 HOTKEY = "ctrl+shift+`"
 PAUSE_KEY = "esc"
@@ -33,6 +39,13 @@ NEIGHBORS = {
 SENTENCE_PUNCT = ".!?"
 CLAUSE_PUNCT = ",;:"
 
+# Shifted symbols on a US QWERTY layout, mapped to their unshifted key.
+SHIFT_SYMBOLS = {
+    "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7",
+    "*": "8", "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]",
+    "|": "\\", ":": ";", '"': "'", "<": ",", ">": ".", "?": "/", "~": "`",
+}
+
 
 class AutoTyper:
     def __init__(self, root: tk.Tk):
@@ -40,6 +53,7 @@ class AutoTyper:
         self.typing = False
         self.paused = False
         self._stop_event = threading.Event()
+        self.target_hwnd = None  # window focused when typing started; kept in focus until stop
 
         root.title("Auto Typing Tool")
         root.geometry("560x520")
@@ -87,6 +101,10 @@ class AutoTyper:
         if self.typing:
             self._stop_event.set()
         else:
+            # Remember whatever window is focused right now — the one the
+            # user clicked into before pressing the hotkey — and keep it in
+            # focus for the whole typing session.
+            self.target_hwnd = GetForegroundWindow()
             threading.Thread(target=self._type_worker, daemon=True).start()
 
     def toggle_pause(self):
@@ -103,6 +121,7 @@ class AutoTyper:
                 return False
             if self.paused and not self._wait_while_paused():
                 return False
+            self._ensure_target_focused()
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return True
@@ -114,6 +133,7 @@ class AutoTyper:
         while self.paused:
             if self._stop_event.is_set():
                 return False
+            self._ensure_target_focused()
             time.sleep(0.05)
         # Focus may have changed while paused; drop stray modifiers.
         self._release_modifiers()
@@ -123,6 +143,12 @@ class AutoTyper:
     def _release_modifiers():
         for key in ("ctrl", "shift", "alt"):
             keyboard.release(key)
+
+    def _ensure_target_focused(self):
+        """Steal focus back to the window typing started in, if it drifted."""
+        hwnd = self.target_hwnd
+        if hwnd and IsWindow(hwnd) and GetForegroundWindow() != hwnd:
+            SetForegroundWindow(hwnd)
 
     # --- human-like timing ---
 
@@ -143,22 +169,62 @@ class AutoTyper:
         return delay
 
     def _send_char(self, ch: str):
+        # Drop any modifier the `keyboard` library thinks is still held
+        # before every keystroke — otherwise a stuck shift/ctrl can turn
+        # Enter into Ctrl+Enter, or a letter like N into a browser hotkey
+        # (Ctrl+N), instead of being typed.
+        self._ensure_target_focused()
+        self._release_modifiers()
+
         if ch == "\n":
             keyboard.send("enter")
         elif ch == "\t":
             keyboard.send("tab")
+        elif "A" <= ch <= "Z":
+            self._send_shifted(ch.lower())
+        elif ch in SHIFT_SYMBOLS:
+            self._send_shifted(SHIFT_SYMBOLS[ch])
         else:
-            # exact=False sends real key events (scan codes), which remote
-            # desktops (Chrome Remote Desktop, VMs, games) can forward —
-            # unlike the default Windows unicode-packet injection.
-            keyboard.write(ch, exact=False)
+            self._send_key(ch)
+
+    @staticmethod
+    def _scan_code(key: str):
+        try:
+            return keyboard.key_to_scan_codes(key)[0]
+        except ValueError:
+            return None
+
+    def _send_key(self, key: str):
+        # Press/release a raw scan code directly rather than going through
+        # keyboard.send()'s hotkey-string parser: that parser splits on
+        # both "+" (key separator) and "," (step separator), so any base
+        # key that happens to be a comma or plus (e.g. "<" -> ",") gets
+        # silently mangled instead of typed.
+        code = self._scan_code(key)
+        if code is None:
+            # No physical key for this character on the current keyboard
+            # layout (e.g. non-ASCII, emoji) — inject it directly.
+            keyboard.write(key)
+            return
+        keyboard.press(code)
+        keyboard.release(code)
+
+    def _send_shifted(self, base: str):
+        code = self._scan_code(base)
+        if code is None:
+            keyboard.write(base)
+            return
+        keyboard.press("shift")
+        keyboard.press(code)
+        keyboard.release(code)
+        keyboard.release("shift")
 
     def _maybe_typo(self, ch: str) -> bool:
         """Type a wrong neighbor key, notice it, backspace, retype. Returns False if stopped."""
         wrong = random.choice(NEIGHBORS[ch.lower()])
         if ch.isupper():
             wrong = wrong.upper()
-        keyboard.write(wrong, exact=False)
+        self._send_char(wrong)
         if not self._wait(random.uniform(0.15, 0.45)):  # time to "notice" the typo
             return False
         keyboard.send("backspace")
@@ -211,6 +277,7 @@ class AutoTyper:
         self.typing = False
         self.paused = False
         self._stop_event.clear()
+        self.target_hwnd = None
         self.set_status(message)
 
     def set_status(self, message: str):

@@ -18,6 +18,7 @@ from tkinter import ttk
 
 import keyboard
 
+import tray
 import ui
 from ui import BG, PANEL, INK, BORDER, GOLD, TEXT, MUTED, FAINT
 
@@ -89,12 +90,38 @@ class WonuvaTyper:
         root.update_idletasks()
         self.own_hwnd = int(root.wm_frame(), 16)
         ui.style_title_bar(self.own_hwnd)
+        # No taskbar button — the app lives in the system tray instead.
+        self._taskbar_owner = tray.hide_from_taskbar(self.own_hwnd)
+        self._tray_hint_shown = False
+        self.tray = tray.Tray(root, APP_NAME, ui.resource_path("assets/icon128.png"),
+                              on_show=self.show_window, on_hide=self.hide_to_tray,
+                              on_exit=self.on_close)
         root.deiconify()
 
         keyboard.add_hotkey(HOTKEY, self.toggle_start_stop)
         keyboard.add_hotkey(PAUSE_KEY, self.toggle_pause)
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        # Minimize goes to the tray rather than the taskbar.
+        root.bind("<Unmap>", self._on_unmap)
+
+    # --- tray ---
+
+    def _on_unmap(self, event):
+        if event.widget is self.root and self.root.state() == "iconic":
+            self.root.after(0, self.hide_to_tray)
+
+    def hide_to_tray(self):
+        self.root.withdraw()
+        if not self._tray_hint_shown:
+            self._tray_hint_shown = True
+            self.tray.notify("Still running in the tray. Hotkeys keep working — "
+                             "click the tray icon to open the window.")
+
+    def show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     # --- UI ---
 
@@ -588,13 +615,18 @@ class WonuvaTyper:
     def set_status(self, message: str, state: str = None, progress=None):
         """Thread-safe: may be called from the hotkey or typing threads."""
         try:
-            self.root.after(0, self.status_bar.set, message, state, progress)
+            self.root.after(0, self._show_status, message, state, progress)
         except (tk.TclError, RuntimeError):
             pass  # window already closed
+
+    def _show_status(self, message, state, progress):
+        self.status_bar.set(message, state, progress)
+        self.tray.set_tooltip(message)
 
     def on_close(self):
         self._stop_event.set()
         keyboard.unhook_all()
+        self.tray.stop()
         self.root.destroy()
 
 

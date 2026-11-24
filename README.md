@@ -38,6 +38,17 @@ Either scroll the mouse wheel over the speed slider (typing keeps going), or cli
 into the Wonuva Typer window — typing pauses automatically so no keys land in the
 wrong place — adjust the slider, then press **Esc** to resume.
 
+## System tray
+
+Wonuva Typer has no taskbar button — it lives in the system tray.
+
+- **Minimize** hides the window to the tray (hotkeys keep working).
+- **Click the tray icon** to bring the window back; right-click for
+  *Show*, *Hide to tray* and *Exit*.
+- Hovering the tray icon shows the current status (e.g. typing progress).
+- Windows 11 puts new tray icons in the overflow (**^**) area at first — drag
+  the icon onto the taskbar corner to keep it always visible.
+
 ## Notes
 
 - The app window stays on top so you can watch the status bar while working in other apps.

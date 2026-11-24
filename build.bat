@@ -9,7 +9,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -c "import keyboard" >nul 2>nul
+python -c "import keyboard, PIL" >nul 2>nul
 if errorlevel 1 (
     echo Installing dependencies...
     python -m pip install -r requirements.txt
@@ -31,8 +31,8 @@ if errorlevel 1 (
     )
 )
 
-echo Building AutoTypingTool.exe...
-python -m PyInstaller --noconfirm AutoTypingTool.spec
+echo Building WonuvaTyper.exe...
+python -m PyInstaller --noconfirm WonuvaTyper.spec
 if errorlevel 1 (
     echo Build failed.
     pause
@@ -40,6 +40,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Build complete: %~dp0dist\AutoTypingTool.exe
+echo Build complete: %~dp0dist\WonuvaTyper.exe
 pause
 exit /b 0

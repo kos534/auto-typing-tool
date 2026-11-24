@@ -4,7 +4,7 @@ __pycache__/
 .venv/
 venv/
 
-# PyInstaller output (AutoTypingTool.spec is kept — build.bat uses it)
+# PyInstaller output (WonuvaTyper.spec is kept — build.bat uses it)
 build/
 dist/
 

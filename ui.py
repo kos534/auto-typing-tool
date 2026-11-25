@@ -334,6 +334,30 @@ def sprite_glyph(kind, size, color, scale):
     return _down(img, size, size)
 
 
+@functools.lru_cache(maxsize=128)
+def sprite_chevron(size, angle, color, scale, ring):
+    """Rounded chevron in a soft circle; angle 0 points down, 180 points up."""
+    import math
+    img = _big(size, size)
+    d = ImageDraw.Draw(img)
+    c = size * SS / 2
+    if ring:
+        R = c - scale * SS
+        d.ellipse((c - R, c - R, c + R, c + R), fill=_rgba(PANEL_HI),
+                  outline=_rgba(BORDER_HI), width=round(scale * SS))
+    w = size * SS * 0.2
+    a = math.radians(angle)
+    ca, sa = math.cos(a), math.sin(a)
+    pts = []
+    for x, y in ((-w, -w / 2), (0, w / 2), (w, -w / 2)):
+        pts.append((c + x * ca - y * sa, c + x * sa + y * ca))
+    lw = 1.8 * scale * SS
+    d.line(pts, fill=_rgba(color), width=round(lw), joint="curve")
+    for px, py in (pts[0], pts[2]):  # round end caps
+        d.ellipse((px - lw / 2, py - lw / 2, px + lw / 2, py + lw / 2), fill=_rgba(color))
+    return _down(img, size, size)
+
+
 @functools.lru_cache(maxsize=8)
 def sprite_dot(r, color, alpha, scale):
     size = 2 * r + 4
@@ -416,20 +440,130 @@ class Header(_SpriteCanvas):
 
 
 class Card(tk.Frame):
-    """Bordered panel with an ornament and a small-caps section heading."""
+    """Bordered panel with an ornament and a small-caps section heading.
 
-    def __init__(self, master, theme, title, glyph="star"):
+    With ``collapsible=True`` it behaves like a web accordion: clicking the
+    header (or Enter/Space on it) slides the body open or closed, a chevron
+    rotates to match, and an optional one-line summary appears in the header
+    while collapsed.
+    """
+
+    ANIM_MS = 200
+    FRAME_MS = 15
+
+    def __init__(self, master, theme, title, glyph="star", collapsible=False,
+                 expanded=True):
         super().__init__(master, bg=PANEL, highlightbackground=BORDER,
                          highlightcolor=BORDER, highlightthickness=1)
+        self.t = theme
+        s = theme.s
+        self.collapsible, self.expanded = collapsible, expanded
+        self._anim = None
+        self._angle = 180.0 if expanded else 0.0  # chevron: 0 = down, 180 = up
+        self._hover = False
+
         head = tk.Frame(self, bg=PANEL)
-        head.pack(fill="x", padx=theme.s(14), pady=(theme.s(10), theme.s(6)))
+        head.pack(fill="x", padx=s(14), pady=(s(10), s(6) if expanded else s(10)))
         self._glyph = glyph_photo(self, theme, glyph)
-        tk.Label(head, image=self._glyph, bg=PANEL).pack(side="left")
-        tk.Label(head, text=" " + " ".join(title.upper()), bg=PANEL, fg=GOLD,
-                 font=theme.f_section).pack(side="left", padx=(theme.s(4), 0))
+        glyph_lbl = tk.Label(head, image=self._glyph, bg=PANEL)
+        glyph_lbl.pack(side="left")
+        self._title = tk.Label(head, text=" " + " ".join(title.upper()), bg=PANEL,
+                               fg=GOLD, font=theme.f_section)
+        self._title.pack(side="left", padx=(s(4), 0))
         self.head = head
-        self.body = tk.Frame(self, bg=PANEL)
-        self.body.pack(fill="both", expand=True, padx=theme.s(14), pady=(0, theme.s(12)))
+
+        # The body lives in a clip frame whose height is animated.
+        self._clip = tk.Frame(self, bg=PANEL)
+        self.body = tk.Frame(self._clip, bg=PANEL)
+        self.body.pack(fill="both", expand=True, padx=s(14), pady=(0, s(12)))
+        if expanded or not collapsible:
+            self._clip.pack(fill="both", expand=True)
+
+        if collapsible:
+            size = s(22)
+            self._chevron = _SpriteCanvas(head, width=size, height=size, bg=PANEL,
+                                          highlightthickness=0, bd=0, takefocus=1,
+                                          cursor="hand2")
+            self._chevron.pack(side="right")
+            self._summary = tk.Label(head, bg=PANEL, fg=MUTED, font=theme.f_small)
+            if not expanded:
+                self._summary.pack(side="right", padx=(0, s(8)))
+            for w in (head, glyph_lbl, self._title, self._summary, self._chevron):
+                w.configure(cursor="hand2")
+                w.bind("<Button-1>", lambda e: self.toggle())
+                w.bind("<Enter>", lambda e: self._set_hover(True))
+                w.bind("<Leave>", lambda e: self._set_hover(False))
+            self._chevron.bind("<Return>", lambda e: self.toggle())
+            self._chevron.bind("<space>", lambda e: self.toggle())
+            self._chevron.bind("<FocusIn>", lambda e: self._draw_chevron())
+            self._chevron.bind("<FocusOut>", lambda e: self._draw_chevron())
+            self._draw_chevron()
+
+    # --- accordion ---
+
+    def set_summary(self, text):
+        if self.collapsible:
+            self._summary.configure(text=text)
+
+    def toggle(self):
+        self.set_expanded(not self.expanded)
+
+    def set_expanded(self, expanded):
+        if not self.collapsible or expanded == self.expanded:
+            return
+        self.expanded = expanded
+        s = self.t.s
+        if self._anim:
+            self.after_cancel(self._anim)
+            self._anim = None
+
+        full = self.body.winfo_reqheight() + s(12)  # body + its bottom padding
+        start_h = self._clip.winfo_height() if self._clip.winfo_ismapped() else 0
+        end_h = full if expanded else 0
+        start_a, end_a = self._angle, (180.0 if expanded else 0.0)
+
+        self._clip.pack_propagate(False)
+        if not self._clip.winfo_ismapped():
+            self._clip.configure(height=0)
+            self._clip.pack(fill="both", expand=True)
+        if expanded:
+            self._summary.pack_forget()
+            self.head.pack_configure(pady=(s(10), s(6)))
+
+        steps = max(1, self.ANIM_MS // self.FRAME_MS)
+
+        def frame(i=1):
+            k = i / steps
+            k = 1 - (1 - k) ** 3  # ease-out cubic
+            self._clip.configure(height=max(0, round(start_h + (end_h - start_h) * k)))
+            self._angle = start_a + (end_a - start_a) * k
+            self._draw_chevron()
+            if i < steps:
+                self._anim = self.after(self.FRAME_MS, frame, i + 1)
+                return
+            self._anim = None
+            if expanded:
+                self._clip.pack_propagate(True)  # back to natural size
+            else:
+                self._clip.pack_forget()
+                self.head.pack_configure(pady=(s(10), s(10)))
+                self._summary.pack(side="right", padx=(0, s(8)))
+
+        frame()
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._title.configure(fg=GOLD_HI if on else GOLD)
+        self._draw_chevron()
+
+    def _draw_chevron(self):
+        c = self._chevron
+        c.clear()
+        size = int(c["width"])
+        active = self._hover or c.focus_get() is c
+        c.sprite(sprite_chevron(size, round(self._angle / 6) * 6,
+                                GOLD_HI if active else GOLD, self.t.scale, active),
+                 size / 2, size / 2)
 
 
 class Slider(_SpriteCanvas):

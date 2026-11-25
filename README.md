@@ -46,6 +46,8 @@ Wonuva Typer has no taskbar button — it lives in the system tray.
 - **Click the tray icon** to bring the window back; right-click for
   *Show*, *Hide to tray* and *Exit*.
 - Hovering the tray icon shows the current status (e.g. typing progress).
+- Only one copy runs at a time: launching it again just brings up the
+  existing window (even from the tray).
 - Windows 11 puts new tray icons in the overflow (**^**) area at first — drag
   the icon onto the taskbar corner to keep it always visible.
 

@@ -18,12 +18,15 @@ from tkinter import ttk
 
 import keyboard
 
+import single_instance
 import tray
 import ui
+from screen_share_hide import (hide_window_from_screen_share,
+                               show_window_in_screen_share)
 from ui import BG, PANEL, INK, BORDER, GOLD, TEXT, MUTED, FAINT
 
 APP_NAME = "Wonuva Typer"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 GetForegroundWindow = _user32.GetForegroundWindow
@@ -77,6 +80,8 @@ class WonuvaTyper:
         self.char_delay = tk.DoubleVar(value=100)
         self.start_delay = tk.DoubleVar(value=1.0)
         self.make_typos = tk.BooleanVar(value=True)
+        self.hide_from_capture = tk.BooleanVar(value=False)
+        self._reverting_capture = False
         # Speed changes apply immediately, even in the middle of typing.
         self.char_delay.trace_add("write", lambda *_: self._apply_live_speed())
 
@@ -92,6 +97,11 @@ class WonuvaTyper:
         ui.style_title_bar(self.own_hwnd)
         # No taskbar button — the app lives in the system tray instead.
         self._taskbar_owner = tray.hide_from_taskbar(self.own_hwnd)
+        # Optionally invisible in screen shares, recordings and screenshots
+        # (still visible on this screen). Off by default; toggled in Settings.
+        if self.hide_from_capture.get():
+            self._apply_capture_setting(initial=True)
+        self.hide_from_capture.trace_add("write", lambda *_: self._apply_capture_setting())
         self._tray_hint_shown = False
         self.tray = tray.Tray(root, APP_NAME, ui.resource_path("assets/icon128.png"),
                               on_show=self.show_window, on_hide=self.hide_to_tray,
@@ -104,6 +114,28 @@ class WonuvaTyper:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         # Minimize goes to the tray rather than the taskbar.
         root.bind("<Unmap>", self._on_unmap)
+
+    def _apply_capture_setting(self, initial=False):
+        if self._reverting_capture:
+            return
+        if self.hide_from_capture.get():
+            ok = hide_window_from_screen_share(self.root)
+            if not ok:
+                # Not supported here: flip the switch back off so it doesn't lie.
+                self._reverting_capture = True
+                try:
+                    self.hide_from_capture.set(False)
+                finally:
+                    self._reverting_capture = False
+                if not initial:
+                    self.set_status("Hiding from screen sharing isn't supported "
+                                    "on this version of Windows.", "error")
+                return
+            if not initial:
+                self.set_status("Hidden from screen sharing and recordings.", "ready")
+        else:
+            show_window_in_screen_share(self.root)
+            self.set_status("Visible in screen sharing and recordings.", "ready")
 
     # --- tray ---
 
@@ -129,8 +161,8 @@ class WonuvaTyper:
         s, root = self.theme.s, self.root
         root.title(APP_NAME)
         root.configure(bg=BG)
-        root.geometry(f"{s(620)}x{s(780)}")
-        root.minsize(s(520), s(700))
+        root.geometry(f"{s(620)}x{s(840)}")
+        root.minsize(s(520), s(760))
         root.attributes("-topmost", True)
         try:
             root.iconbitmap(default=ui.resource_path("assets/icon.ico"))
@@ -216,8 +248,10 @@ class WonuvaTyper:
 
     def _build_settings(self, parent):
         t, s = self.theme, self.theme.s
-        card = ui.Card(parent, t, "Settings", glyph="diamond")
+        # Accordion: click the header to collapse/expand.
+        card = ui.Card(parent, t, "Settings", glyph="diamond", collapsible=True)
         card.pack(side="bottom", fill="x", pady=(s(12), 0))
+        self.settings_card = card
         body = card.body
         body.columnconfigure(0, weight=1)
 
@@ -238,18 +272,27 @@ class WonuvaTyper:
         ui.Slider(body, t, self.start_delay, 0, 10, 0.5).grid(
             row=3, column=0, sticky="ew", pady=(s(2), s(8)))
 
-        typo = tk.Frame(body, bg=PANEL)
-        typo.grid(row=4, column=0, sticky="ew")
-        ui.Toggle(typo, t, self.make_typos).pack(side="right")
-        text = tk.Frame(typo, bg=PANEL)
-        text.pack(side="left", fill="x")
-        tk.Label(text, text="Simulate typos", bg=PANEL, fg=TEXT,
-                 font=t.f_body).pack(anchor="w")
-        tk.Label(text, text="Now and then hits a neighboring key, notices, and corrects it.",
-                 bg=PANEL, fg=MUTED, font=t.f_small).pack(anchor="w")
+        def toggle_row(r, title, description, variable, pady=(0, 0)):
+            row = tk.Frame(body, bg=PANEL)
+            row.grid(row=r, column=0, sticky="ew", pady=pady)
+            ui.Toggle(row, t, variable).pack(side="right")
+            text = tk.Frame(row, bg=PANEL)
+            text.pack(side="left", fill="x")
+            tk.Label(text, text=title, bg=PANEL, fg=TEXT,
+                     font=t.f_body).pack(anchor="w")
+            tk.Label(text, text=description, bg=PANEL, fg=MUTED,
+                     font=t.f_small).pack(anchor="w")
 
-        self.char_delay.trace_add("write", lambda *_: self._update_setting_labels())
-        self.start_delay.trace_add("write", lambda *_: self._update_setting_labels())
+        toggle_row(4, "Simulate typos",
+                   "Now and then hits a neighboring key, notices, and corrects it.",
+                   self.make_typos)
+        toggle_row(5, "Hide from screen sharing",
+                   "Invisible in screen shares, recordings and screenshots.",
+                   self.hide_from_capture, pady=(s(10), 0))
+
+        for var in (self.char_delay, self.start_delay, self.make_typos,
+                    self.hide_from_capture):
+            var.trace_add("write", lambda *_: self._update_setting_labels())
         self._update_setting_labels()
 
     def _build_hotkeys(self, parent):
@@ -295,6 +338,13 @@ class WonuvaTyper:
         self._speed_value.configure(
             text=f"{self._pace_name(ms)}  ·  {ms:.0f} ms/char  ·  ≈{wpm:.0f} WPM")
         self._delay_value.configure(text="Immediately" if delay == 0 else f"{delay:.1f} s")
+        # One-line summary shown in the header while Settings is collapsed.
+        parts = [f"{self._pace_name(ms)} {ms:.0f} ms",
+                 "no delay" if delay == 0 else f"{delay:g} s delay",
+                 "typos on" if self.make_typos.get() else "typos off"]
+        if self.hide_from_capture.get():
+            parts.append("hidden")
+        self.settings_card.set_summary("  ·  ".join(parts))
 
     def _on_text_modified(self, _event=None):
         self.text_box.edit_modified(False)
@@ -631,10 +681,17 @@ class WonuvaTyper:
 
 
 def main():
+    # Only one copy at a time: a second launch just brings up the first one.
+    instance = single_instance.acquire()
+    if instance is None:
+        single_instance.signal_existing()
+        return
+
     ui.enable_dpi_awareness()
     ui.set_app_id("Wonuva.Typer")
     root = tk.Tk()
-    WonuvaTyper(root)
+    app = WonuvaTyper(root)
+    instance.on_show_request(lambda: root.after(0, app.show_window))
     root.mainloop()
 
 
